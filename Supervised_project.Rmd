@@ -1,0 +1,1071 @@
+---
+title: "Supervised-proj-def"
+author: "Michele Bartesaghi"
+date: '2022-06-10'
+output: html_document
+---
+
+In this data set, data are collected to study the effects that smoking has on the
+human body. The aim of the project is to identify these effects and use those body 
+signals to predict whether an individual is smoking or not
+
+Data shape : (55692, 27)
+
+- ID 
+- gender
+- age 
+- height(cm)
+- weight(kg)
+- waist(cm) 
+- eyesight(left)
+- eyesight(right)
+- hearing(left)
+- hearing(right)
+- systolic 
+- relaxation 
+- fasting blood sugar
+- Cholesterol 
+- triglyceride
+- HDL 
+- LDL 
+- hemoglobin
+- Urine protein
+- serum creatinine
+- AST
+- ALT 
+(AST is found in the liver, brain, pancreas, heart, kidneys, lungs, and skeletal muscles. ALT is found mainly in the liver)
+- Gtp 
+- oral 
+- dental caries
+- tartar
+- smoking
+
+#Import the libraries
+```{r}
+library(readxl)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(ggthemes)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+library(ggpubr)
+library(patchwork)
+library(scales)
+library(corrplot)
+library(MASS)
+library(DataExplorer)
+library(car)
+library(olsrr) 
+library(caret)
+library(gtools)
+library(psych)
+library(tree)
+library(ISLR)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(randomForest)
+library(class)
+library(caTools)
+library(ROCR)
+library(plotly)
+library(party)
+```
+
+```{r}
+#custom function for accuracy 
+accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+```
+
+#IMPORT DATA, visualisation and preprocessing
+```{r}
+smoke <- as_tibble(readr::read_csv("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Machine Learning, Statistical Learning, Deep Learning, Cloud Distributed Computing and AI/Statistical methods for ML module/First personal project/smoking.csv", show_col_types = FALSE))
+
+#transform in factors the variables that should be factors
+smoke$gender <- as.factor(smoke$gender)
+smoke$`hearing(left)` <- as.factor(smoke$`hearing(left)`)
+smoke$`hearing(right)` <- as.factor(smoke$`hearing(left)`)
+smoke$`Urine protein` <- as.factor(smoke$`Urine protein`)
+smoke$oral <- as.factor(smoke$oral)
+smoke$`dental caries` <- as.factor(smoke$`dental caries`)
+smoke$tartar <- as.factor(smoke$tartar)
+smoke$smoking <- as.factor(smoke$smoking)
+
+#remove both ID and oral, which is useless
+#ID is simply a numeric, meaningless identifier
+#oral is a one level factor 
+smoke <- smoke %>% dplyr::select(-c(ID,oral)) 
+
+
+#rename the columns
+cn <- c("gender","age","height","weight","waist","eyesight_L","eyesight_R","hearing_L","hearing_R", "systolic","relaxation","sugar","cholesterol","triglyceride","HDL","LDL","hemoglobin","urine_protein","serum_creatinine","AST","ALT","Gtp", "caries","tartar","smoking")
+colnames(smoke) <- cn
+rm(cn)
+#set smoking as the first column
+smoke <- smoke %>% relocate(smoking)
+
+#glimpse(smoke)
+#anyNA(smoke)   #no NA's 
+```
+
+#Check for outliers with boxplots
+```{r}
+#prepare a boxplot for every numeric variable
+#select numeric features
+smoke_num <- select_if(smoke,is.numeric) 
+#create a tibble with two columns: the feature name and the values
+smoke_num_box <-smoke_num %>% gather(variable,values,1:18)
+
+ggplot(smoke_num_box)+
+  geom_boxplot(aes(x=variable,y=values), fill="Salmon") + 
+  facet_wrap(~variable,ncol=3,scales="free") + 
+  theme_minimal()+
+  theme(strip.text.x = element_blank(),
+        text = element_text(size=12))
+
+# summary(boxplot.stats(smoke$age))
+# summary(boxplot.stats(smoke$eyesight_L))
+# summary(boxplot.stats(smoke$eyesight_R))
+# summary(boxplot.stats(smoke$HDL))
+# summary(boxplot.stats(smoke$height))
+# summary(boxplot.stats(smoke$ALT))
+# summary(boxplot.stats(smoke$triglyceride))
+
+#the count of outliers rather large for every variable, therefore these points 
+#cannot be considered as outliers
+```
+
+#Some data visualisation
+```{r}
+#gender visualisation
+male_perc <- nrow(smoke %>% dplyr::select(gender) %>% 
+                    filter(gender == "M"))/length(smoke$gender)*100
+female_perc <- nrow(smoke %>% dplyr::select(gender) %>% 
+                      filter(gender == "F"))/length(smoke$gender)*100
+
+pgen <- smoke %>%  
+  count(gender) %>% 
+  mutate("perc" = round(c(female_perc,male_perc),2))
+
+pgen <- pgen %>% 
+  arrange(desc(gender)) %>%
+  mutate(prop = n / sum(pgen$perc) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+
+ggplot(pgen, aes(x="", y=n, fill=gender)) +
+  geom_bar(stat="identity", width=1,color="white")+
+  coord_polar("y",0,1)+
+  labs(x = "", y = "",title="Gender")+
+  theme_minimal()+ # remove background, grid, numeric labels
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  geom_text(aes(y = ypos, label = perc), color = "white", size=6) +
+  scale_fill_brewer(palette="Set2")
+```
+
+```{r}
+#age for different genders
+smoke$age_group <- cut(smoke$age, c(0,18,50,100,120), labels = c("<18","18-50","50-100",">100") )
+
+ggplot(smoke,aes(x=age_group, fill=gender))+
+  geom_bar(col="black")+
+  facet_wrap(.~gender)+
+  stat_count(aes(y=..count.., label=..count..), vjust=-0.5,geom="text", col="black", size=3.5)+
+  labs(x="Age Group", y = "Count", title="Age distribution", fill= "Sex")+
+  theme_minimal()+
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  scale_fill_brewer(palette="Set2")
+
+```
+
+```{r}
+#smoking
+smoke_perc <- nrow(smoke %>% dplyr::select(smoking) %>% 
+                    filter(smoking == 1))/length(smoke$smoking)*100
+nonsmoke_perc <- nrow(smoke %>% dplyr::select(smoking) %>% 
+                      filter(smoking == 0))/length(smoke$smoking)*100
+
+pgen <- smoke %>%  
+  count(smoking) %>% 
+  mutate("perc" = round(c(nonsmoke_perc,smoke_perc),2))
+
+pgen <- pgen %>% 
+  arrange(desc(smoking)) %>%
+  mutate(prop = n / sum(pgen$perc) *100) %>%
+  mutate(ypos = cumsum(prop)- 0.5*prop )
+
+ggplot(pgen, aes(x="", y=n, fill=smoking)) +
+  geom_bar(stat="identity", width=1,color="white")+
+  coord_polar("y",0,1)+
+  labs(x = "", y = "",title="Smokers vs non smokers")+
+  theme_minimal()+ # remove background, grid, numeric labels
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  geom_text(aes(y = ypos, label = perc), color = "white", size=6) +
+  scale_fill_brewer(palette="Set2")
+
+
+#overall
+overall <- smoke %>% 
+  group_by(gender,smoking) %>%
+  summarise(avg_age = round(mean(age),0), avg_height = round(mean(height),0), avg_weight = round(mean(`weight`),0))
+xtable::xtable(overall)
+```
+
+```{r}
+#smoking for different genders
+ggplot(smoke,aes(x=smoking, fill=gender))+
+  geom_bar(col="black")+
+  facet_wrap(.~gender)+
+  stat_count(aes(y=..count.., label=..count..), vjust=-0.5,geom="text", col="black", size=3.5)+
+  labs(x="Smokers", y = "Count", title="Smoking and gender", fill= "Sex")+
+  theme_minimal()+
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  scale_fill_brewer(palette="Set2")
+```
+
+
+```{r}
+#Heart implications
+#(https://www.heart.org/en/health-topics/high-blood-pressure/understanding-blood-pressure-readings)
+
+smoke$pressure <- ifelse(smoke$systolic<120 & smoke$relaxation<80,"Normal",NA)
+smoke$pressure <- ifelse(smoke$systolic>=120 & smoke$relaxation <80, "Elevated",smoke$pressure)
+smoke$pressure <- ifelse(smoke$systolic>=130 | smoke$relaxation>=80,"Hypertension Stage 1",smoke$pressure)
+smoke$pressure <- ifelse(smoke$systolic>=140 | smoke$relaxation>=90,"Hypertension Stage 2",smoke$pressure)
+smoke$pressure <- ifelse(smoke$systolic>=180 | smoke$relaxation>=120,"Hypertensive Crisis",smoke$pressure)
+
+table <- smoke %>% 
+  mutate(`Blood Pressure`= smoke$pressure) %>%
+  group_by(`Blood Pressure`)%>%
+  summarise(smokers= length(smoking[smoking=="1"]), 
+            `non smokers`= length(smoking[smoking=="0"]),
+            `smokers percentage`= round(smokers/sum(smokers,`non smokers`)*100,0))%>%
+  arrange(desc(`smokers percentage`))
+table
+
+ggplot(smoke, aes(x= pressure, fill = smoking))+
+  geom_bar(position = "dodge", col = "black", alpha=0.9)+
+  scale_fill_brewer(palette="Set2")+
+  labs(title="Pressure", fill="Smoking", x="Pressure level")+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", hjust=0.5),
+        axis.text.x = element_text(size= 9, angle = 20))
+```
+
+
+```{r}
+#body mass index
+smoke$bmi <- (smoke$weight/(smoke$height*smoke$height))*10000
+smoke$bmi_cat <- ifelse(smoke$bmi<18.5,"Underweight", NA )
+smoke$bmi_cat <- ifelse(smoke$bmi>=18.5 & smoke$bmi <=24.9,"Healthy BMI", smoke$bmi_cat )
+smoke$bmi_cat <- ifelse(smoke$bmi > 24.9 & smoke$bmi<=29.9,"Overweight", smoke$bmi_cat)
+smoke$bmi_cat <- ifelse(smoke$bmi > 30 & smoke$bmi<=39.9, "Obese", smoke$bmi_cat)
+smoke$bmi_cat <- ifelse(smoke$bmi > 40, "Extremely Obese", smoke$bmi_cat)
+table(smoke$bmi_cat)
+smoke %>%  filter(bmi > 40) %>%  dplyr::select(bmi_cat,smoking) 
+
+ggplot(smoke, aes(x=bmi_cat, fill= as.factor(smoking)))+
+  geom_bar(position="dodge", col="black", alpha=0.9)+
+  scale_fill_brewer(label=c("no","yes"),palette="Set2")+
+  labs(x=" ", fill="Smoking", title="BMI")+
+  theme_minimal()+
+  theme(plot.title= element_text(face = "bold", hjust=0.5))
+```
+
+```{r}
+#ldl levels
+smoke$LDL_stat <- case_when(
+    smoke$LDL<100 ~ "Optimal",
+    smoke$LDL >= 100 & smoke$LDL < 130 ~ "Near optimal",
+    smoke$LDL >=130 & smoke$LDL < 159 ~ "Borderline high",
+    smoke$LDL >=159 & smoke$LDL < 190 ~ "High",
+    smoke$LDL >= 190 ~ "Very high")
+table(smoke$smoking, smoke$LDL_stat)
+
+ggplot(smoke, aes(x=LDL, fill=smoking))+
+  geom_bar(alpha=0.8)+
+  labs(title="LDL", fill="Smoking")+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", hjust=0.5))+
+  scale_fill_brewer(label=c("no","yes"),palette="Set2")+
+  geom_vline(aes(xintercept=mean(smoke$LDL)), col = "black", lwd = 1)+
+  xlim(c(0,500))
+```
+
+```{r}
+#hdl levels
+ggplot(subset(smoke,smoke$HDL<200), aes(x=HDL, fill=as.factor(smoking)))+
+  geom_bar(alpha=0.8)+
+  labs(title="HDL", fill="Smoking")+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", hjust=0.5))+
+  scale_fill_brewer(label=c("no","yes"),palette="Set2")+
+  geom_vline(aes(xintercept=mean(smoke$HDL)), col = "black", lwd = 1)
+```
+
+```{r}
+#we have seen that the majority of the people in the dataset is aged between 19 and 50
+smoke$chol_grp <- ifelse(smoke$cholesterol>=125 & smoke$cholesterol<=200,"Healthy", "Unhealthy")
+
+ggplot(smoke,aes(x=as.factor(chol_grp), fill=as.factor(smoking)))+
+  geom_bar(col="black", alpha=0.8)+
+  scale_fill_brewer(label=c("no","yes"),palette="Set2")+
+  labs(title="Cholesterol", fill="Smoking", x="Cholesterol Level")+
+  geom_text(aes(label=..count..), stat="count", vjust=2.5, size=4)+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+  
+```
+
+```{r}
+#triglycerides
+table <- smoke%>% dplyr::select(c("triglyceride", "smoking")) %>% 
+  group_by(smoking) %>%
+  summarise(trigly_mean = mean(triglyceride)) %>%
+  mutate(., Type=ifelse(trigly_mean<150,"Healthy","Unhealthy"))
+
+smoke$trigly_grp <- ifelse(smoke$triglyceride < 150, "Healthy",
+                           ifelse((smoke$triglyceride >= 150 & smoke$triglyceride < 200), "Borderline high", "High"))
+
+ggplot(smoke, aes(x= trigly_grp, fill = smoking))+
+  geom_bar(position = "dodge", col = "black", alpha=0.9)+
+  scale_fill_brewer(palette="Set2")+
+  labs(title="Triglyceride", fill="Smoking", x="Triglyceride level")+
+  theme_minimal()+
+  theme(plot.title = element_text(face="bold", hjust=0.5))
+```
+
+
+```{r}
+#liver conditions
+xtable::xtable(smoke%>% dplyr::select(c("ALT", "AST", "Gtp", "smoking")) %>% 
+  group_by(smoking) %>%
+  summarise(Alt_mean = mean(ALT),
+            Ast_mean = mean(AST),
+            Gtp_mean = mean(Gtp)))
+```
+
+#distributions check(height, weight, age)
+<!-- # ```{r} -->
+<!-- # #height -->
+<!-- # boxplot(smoke$height,col= "tan1") -->
+<!-- # describe(smoke$height) -->
+<!-- # #mean: 164.65 -->
+<!-- # #min: 130 -->
+<!-- # #max: 190 -->
+<!-- # shapiro.test(sample(5000,smoke$height)) #p-value = 1.465e-05 -->
+<!-- #  -->
+<!-- # #age -->
+<!-- # boxplot(smoke$age,col= "tan1") -->
+<!-- # describe(smoke$age) -->
+<!-- # #mean: 44.18	 -->
+<!-- # #min: 20 -->
+<!-- # #max: 85 -->
+<!-- # poisson.test(sum(smoke$age),length(smoke$age), alternative = "two.sided", conf.level = 0.95)   #p-value < 2.2e-16 -->
+<!-- # #confidence interval: 44.12773 44.23816 -->
+<!-- #  -->
+<!-- # #weight -->
+<!-- # boxplot(smoke$weight, col= "tan1") -->
+<!-- # describe(smoke$weight) -->
+<!-- # #mean: 65.86 -->
+<!-- # #min: 30 -->
+<!-- # #max: 135 -->
+<!-- # shapiro.test(sample(5000,smoke$weight)) #p-value =0.0059 -->
+<!-- # hist(smoke$weight) -->
+<!-- # t.test(smoke$weight)   #p-value < 2.2e-16 -->
+<!-- #  -->
+<!-- # #waist -->
+<!-- # boxplot(smoke$waist,col= "tan1")   #a lot of outliers -->
+<!-- # hist(smoke$waist) -->
+<!-- # qqnorm(smoke$waist) -->
+<!-- # shapiro.test(sample(5000, smoke$waist))  #p-value = 0.0002791 -->
+<!-- # ``` -->
+
+```{r}
+#free memory 
+rm(smoke_num)
+rm(smoke_num_box)
+rm(pgen)
+rm(overall)
+rm(table)
+
+#remove the columns added for visualisation purposes
+smoke <- smoke[,1:25]
+```
+
+#correlation matrix
+```{r}
+fact_var <- c('smoking','tartar','caries','urine_protein','gender', "hearing_L", "hearing_R")
+
+correlation <- cor(smoke %>% dplyr::select(-all_of(fact_var)))
+col<- colorRampPalette(c("blue", "white", "red"))
+corrplot(correlation, type = "upper",
+         tl.col = "black", tl.srt = 45)
+#symnum(correlation, abbr.colnames = FALSE)
+
+#cholesterol is highly correlated with LDL (expectedly)
+#systolic is highly correlated with relaxation 
+#ALT and AST are highly correlated (expectedly): we keep the AST which appears to be more "general"
+```
+
+#prepare data for classification
+```{r}
+smoke <- smoke %>% select(-c(waist, ALT))
+```
+
+###CLASSIFICATION###
+```{r}
+set.seed(1)
+# prop.table(table(defsmoke$smoking))   # 0: 0.6327121, 1: 0.3672879 
+tt_split  <- createDataPartition(smoke$smoking, p = 0.7, list = FALSE)
+
+trainset = smoke[tt_split, ] #38985 rows
+#prop.table(table(smoke$smoking[tt_split])) # 0: 0.6327049, 1: 0.3672951 
+
+testset = smoke[-tt_split, ] #16707 rows
+#prop.table(table(smoke$smoking[-tt_split])) # 0: 0.6327288, 1: 0.3672712
+
+#we have the same class proportions between the original dataset, the training and the test set
+```
+
+#DECISION TREE
+```{r}
+# training the tree
+tree.train <- rpart(smoking ~ .,  data=trainset, cp = 0.001, control = list(maxdepth = 7))
+
+library(rattle)
+library(rpart.plot)
+library(RColorBrewer)
+fancyRpartPlot(tree.train)
+
+#testing on the test set
+tree.pred <- predict(tree.train, testset,type = "class")
+#assessing the accuracy
+confusionMatrix(tree.pred, testset$smoking) #~74
+ 
+# Validation of decision tree using the ‘Complexity Parameter’ and cross validated error :
+# To validate the model printcp and plotcp functions. ‘CP’ stands for Complexity Parameter of the tree.
+# This function provides the optimal prunings based on the cp value.
+# 
+# We prune the tree to avoid any overfitting of the data. The convention is to have a small tree and the one with least cross validated error given by printcp() function i.e. ‘xerror’.
+printcp(tree.train)
+#we can select the one having the least cross-validated error and use it to prune the tree.
+tree.train$cptable[which.min(tree.train$cptable[,"xerror"]),"CP"]  
+
+plotcp(tree.train)
+#graphical representation of the cross validated error summary. 
+#The cp values are plotted against the geometric mean to depict the deviation until the minimum value is reached.
+ptree <- prune(tree.train, cp = tree.train$cptable[which.min(tree.train$cptable[,"xerror"]),"CP"])
+fancyRpartPlot(ptree, uniform=TRUE, main="Pruned Classification Tree")
+confusionMatrix(predict(ptree, testset, type = "class"), testset$smoking)
+
+summary(tree.train)
+
+
+#CV ON THE DEPTH
+result = list()
+for (i in 1:20){
+  tree.train <- rpart(smoking ~ .,  data=trainset, cp=0.0024, control = list(maxdepth = i))
+  tree.pred <- predict(tree.train, testset,type = "class")
+  tab <- table(tree.pred,testset$smoking)
+  result[i] <- accuracy(tab)
+}
+plot(x= 1:20, y= result,xlim=c(1,20), ylim = c(65,75), xlab="Depth", ylab="Accuracy", type = "b")
+points(x=7, y = result[7], col= "red", pch = 19)
+
+# #CV ON TRAINING SET SIZE
+# acc <- list()
+# for (i in 1:9){
+#   tt_split  <- createDataPartition(smoke$smoking, p = i/10, list = FALSE)
+#   trainset = smoke[tt_split,] 
+#   testset = smoke[-tt_split,] 
+#   tree.train <- rpart(smoking ~ .,  data=trainset, cp=0.0024, control = list(maxdepth = 5))
+#   tree.pred <- predict(tree.train, testset,type = "class")
+#   tab <- table(tree.pred,testset$smoking)
+#   acc[i] <- accuracy(tab)
+# }
+# x = seq(1,9)
+# plot(x=x, y= acc, xlim=c(1,10), ylim = c(72,75), xlab="Training set portion", ylab="Accuracy", type="b")
+
+#if this section is not commented, after running it reloading and recreating the split
+#with 70% as training is needed
+#No significant difference if the rest is already optimal. The best is 80% training
+```
+
+#balanced
+```{r}
+#balancing the dataset
+#install.packages("smotefamily")
+library(ROSE)
+set.seed(1)
+smoke.rose <- ROSE(smoking~., data=smoke, seed=3)$data
+table(smoke.rose$smoking)
+
+set.seed(1)
+tt_split.rose  <- caret::createDataPartition(smoke.rose$smoking, p = 0.7, list = FALSE)
+trainset.rose = smoke.rose[tt_split.rose, ] #38985 rows
+testset.rose = smoke.rose[-tt_split.rose, ] #16707 rows
+```
+
+```{r}
+tree.train <- rpart(smoking ~ .,  data=trainset.rose, cp = 0.001, control = list(maxdepth = 5))
+tree.pred <- predict(tree.train, testset.rose,type = "class")
+#assessing the accuracy
+confusionMatrix(tree.pred, testset.rose$smoking) #~75 
+
+```
+
+```{r}
+##
+## Confusion Matrix
+
+#           Ref
+#
+#         NE   E
+#        _________
+# P  NE | TN |  FN|
+# R     |_________|
+# E  E  | FP |  TP|
+#       |_________|
+```
+
+
+<!-- #load again: run if training set size tuning has been performed-->
+<!-- ```{r} -->
+<!-- smoke <- as_tibble(readr::read_csv("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Machine Learning, Statistical Learning, Deep Learning, Cloud Distributed Computing and AI/Statistical methods for ML module/First personal project/smoking.csv", show_col_types = FALSE)) -->
+
+<!-- #transform in factors the variables that should be factors -->
+<!-- smoke$gender <- as.factor(smoke$gender) -->
+<!-- smoke$`hearing(left)` <- as.factor(smoke$`hearing(left)`) -->
+<!-- smoke$`hearing(right)` <- as.factor(smoke$`hearing(left)`) -->
+<!-- smoke$`Urine protein` <- as.factor(smoke$`Urine protein`) -->
+<!-- smoke$oral <- as.factor(smoke$oral) -->
+<!-- smoke$`dental caries` <- as.factor(smoke$`dental caries`) -->
+<!-- smoke$tartar <- as.factor(smoke$tartar) -->
+<!-- smoke$smoking <- as.factor(smoke$smoking) -->
+
+<!-- #remove both ID and oral, which is useless -->
+<!-- #ID is simply a numeric, meaningless identifier -->
+<!-- #oral is a one level factor  -->
+<!-- smoke <- smoke %>% dplyr::select(-c(ID,oral))  -->
+
+
+<!-- #rename the columns -->
+<!-- cn <- c("gender","age","height","weight","waist","eyesight_L","eyesight_R","hearing_L","hearing_R", "systolic","relaxation","sugar","cholesterol","triglyceride","HDL","LDL","hemoglobin","urine_protein","serum_creatinine","AST","ALT","Gtp", "caries","tartar","smoking") -->
+<!-- colnames(smoke) <- cn -->
+<!-- rm(cn) -->
+<!-- #set smoking as the first column -->
+<!-- smoke <- smoke %>% relocate(smoking) -->
+
+<!-- smoke <- smoke %>% select(-c(waist, ALT)) -->
+
+
+<!-- #training and test set -->
+<!-- set.seed(1) -->
+<!-- tt_split  <- createDataPartition(smoke$smoking, p = 0.7, list = FALSE) -->
+<!-- trainset = smoke[tt_split, ] #38985 rows -->
+<!-- testset = smoke[-tt_split, ] #16707 rows -->
+
+<!-- ``` -->
+
+#random forest
+
+```{r}
+#on unbalanced
+set.seed(1)
+rf.smoke=randomForest(smoking~ ., data=smoke,subset=tt_split,mtry=4,importance=TRUE)
+plot(rf.smoke, main = "Error")
+yhat.rf = predict(rf.smoke,newdata=testset)
+confusionMatrix(yhat.rf, testset$smoking)  #~84
+rf.smoke$importance
+varImpPlot(rf.smoke)
+
+result <- rfcv(trainset[,-1], trainset$smoking, cv.fold=3)
+with(result, plot(n.var, error.cv, log="x", type="o", lwd=2))
+#the difference is not that evident. We can still remove the variables that appear
+#to be less relevant and be left almost with the same accuracy
+
+rm(rf.smoke)
+
+#cv on the number of features used for each split
+test_accuracy <- c()
+for (i in 1:15){
+  rf.smoke=randomForest(smoking~ ., data=smoke,subset=tt_split,mtry=i,importance=TRUE)
+  yhat.rf = predict(rf.smoke,newdata=testset)
+  tab <- table(yhat.rf, testset$smoking)
+  test_accuracy[i] <- accuracy(tab)
+}
+plot(x= 1:15, y= test_accuracy, xlim=c(1,15), xlab="Number of features", ylab="Test accuracy", type = "b")
+#thanks to this validation I decided to use mtry=4 above
+```
+
+#balanced
+```{r}
+#balanced dataset -> 78% accuracy
+set.seed(1)
+rf.smoke=randomForest(smoking~ ., data=smoke.rose, subset = tt_split.rose, mtry=7,importance=TRUE)
+plot(rf.smoke, main = "Error")
+yhat.rf = predict(rf.smoke,newdata=testset.rose)
+confusionMatrix(yhat.rf, testset.rose$smoking)  
+
+
+test_accuracy <- c()
+for (i in 1:15){
+  rf.smoke=randomForest(smoking~ ., data=smoke.rose,subset=tt_split.rose,mtry=i,importance=TRUE)
+  yhat.rf = predict(rf.smoke,newdata=testset.rose)
+  tab <- table(yhat.rf, testset.rose$smoking)
+  test_accuracy[i] <- accuracy(tab)
+}
+plot(x= 1:15, y= test_accuracy, xlim=c(1,15), xlab="Number of features", ylab="Test accuracy", type = "b")
+# cv on the number of features to be used at each split
+
+rm(rf.smoke)
+```
+
+###KNN
+```{r}
+#it would be wrong to transform factors into integers because that would mean
+#there is a sort of distance
+
+smoke <- smoke %>% dplyr::select(-c('gender', 'tartar', 'hearing_L','hearing_R','urine_protein', 'caries'))
+#remove factors
+```
+
+#balanced
+```{r}
+#balancing the dataset without factors
+#install.packages("smotefamily")
+library(ROSE)
+smoke.rose <- ROSE(smoking~., data=smoke, seed=3)$data
+smoke.rose <- data.frame(smoking = smoke.rose[,1],scale(smoke.rose[,-1])) #scale
+table(smoke.rose$smoking)
+
+#split with scaled balanced data
+set.seed(1)
+tt_split.rose  <- caret::createDataPartition(smoke.rose$smoking, p = 0.7, list = FALSE)
+trainset.rose = smoke.rose[tt_split.rose, ] #38985 rows
+testset.rose = smoke.rose[-tt_split.rose, ] #16707 rows
+```
+
+#run ONLY to test classifiers on normalised data
+```{r}
+#normalise numerical data for the knn classifier which works with
+#distances
+
+smoke[sapply(smoke, is.numeric)] <- lapply(smoke[sapply(smoke, is.numeric)], scale)
+head(smoke)
+#summary(smoke)
+```
+
+```{r}
+#new split with scaled data
+set.seed(1)
+tt_split  <- createDataPartition(smoke$smoking, p = 0.7, list = FALSE)
+trainset = smoke[tt_split, ] #38985 rows
+testset = smoke[-tt_split, ] #16707 rows
+
+# pred.Ytrain = knn(trainset[,-1], trainset[,-1], cl = trainset$smoking, k=5)
+# tab <- table(pred.Ytrain, trainset$smoking)
+# # accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+# accuracy(tab)    
+
+
+#study the accuracy as a function of k, and then we use that k on the test set
+p.Ytest = NULL
+test.error.rate = NULL
+for(i in 1:20){
+  set.seed(1)
+  p.Ytest = knn(trainset[,-1], testset[,-1], cl = trainset$smoking, k=i)
+  tab <- table(p.Ytest, testset$smoking)
+  test.error.rate[i] = 100-accuracy(tab)
+}
+plot(1:20, test.error.rate, xlab = "k",ylab =  "Test error", main = "Test error rate vs k", type="b")
+min(test.error.rate)   #~23
+which.min(test.error.rate)  #1
+# k=19 
+
+pred.Ytest = knn(trainset[,-1], testset[,-1], cl = trainset$smoking,k=19)
+tab <- table(pred.Ytest, testset$smoking)
+accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+accuracy(tab)    #test accuracy ~73%
+
+```
+
+#balanced
+```{r}
+
+#study the accuracy as a function of k, and then we use that k on the test set
+p.Ytest = NULL
+test.error.rate = NULL
+for(i in 1:20){
+  set.seed(1)
+  p.Ytest = knn(trainset.rose[,-1], testset.rose[,-1], cl = trainset.rose$smoking, k=i)
+  tab <- table(p.Ytest, testset.rose$smoking)
+  test.error.rate[i] = 100-accuracy(tab)
+}
+plot(1:20, test.error.rate, xlab = "k",ylab =  "Test error", main = "Test error rate vs k", type="b")
+min(test.error.rate)   #~23
+which.min(test.error.rate)  #1
+#but k=1 leads to overfitting. k=6 is a good compromise
+
+pred.Ytest = knn(trainset.rose[,-1],testset.rose[,-1],trainset.rose$smoking,k=15)
+tab <- table(pred.Ytest, testset.rose$smoking)
+accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+accuracy(tab)    #test accuracy ~73%
+
+```
+
+
+#PCA for KNN VISUALISATION
+```{r}
+#unbalanced
+labels <- smoke$smoking
+smoke <- smoke %>% dplyr::select(-smoking)
+set.seed(1)
+smokeMat <- as.matrix(smoke)
+smoke.svd <- svd(smokeMat)
+smoke_proj <- as.data.frame(smokeMat %*% smoke.svd[[3]][,c(1,2)]) %>% mutate(labels = labels)
+set.seed(1)
+subsmoke_proj <- sample_n(smoke_proj,1000)  #for plotting purposes
+```
+
+
+```{r}
+set.seed(1)
+tt_split  <- createDataPartition(subsmoke_proj$labels, p = 0.7, list = FALSE)
+subtrainset = subsmoke_proj[tt_split, ] 
+subtestset = subsmoke_proj[-tt_split, ] 
+
+Ypred_knn <- class::knn(subtrainset[,c(1,2)], subtestset[,c(1,2)], cl = subtrainset$labels, k =19)
+accuracy(table(Ypred_knn, subtestset$labels))  #69.5, just to visualise
+
+rm(smokeMat)
+rm(smoke_proj)
+rm(smoke.svd)
+```
+
+```{r}
+plot.df = data.frame(subtestset, predicted = Ypred_knn)
+
+
+plot.df1 = data.frame(x = plot.df$V1, 
+                      y = plot.df$V2, 
+                      predicted = plot.df$predicted)
+
+ 
+# find_hull = function(df) df[chull(df$x, df$y), ]
+# boundary = ddply(plot.df1, .variables = "predicted", .fun = find_hull)
+# #ddply apply function then combine results into a data frame
+# #find_hill finds convex hull to draw polygons onto 2d pca plots per group,
+#to determine boundary points
+
+# ggplot(plot.df, aes(V1, V2, color = predicted, fill = predicted)) + 
+#   geom_point(size = 2) + 
+#   geom_polygon(data = boundary, aes(x,y), alpha = 0.15)+
+#   labs(title="K-NN")+
+#   theme_minimal()
+```
+
+```{r}
+#my visualisation of the knn result
+plotdefinitivo <- as.data.frame(cbind(plot.df1,subtestset))
+
+g <- ggplot(plotdefinitivo)+
+  geom_point(aes(V1,V2, col = labels), size = 4)+
+  labs(title="K-NN on a subset of the original observations")+
+  theme_minimal()+
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  scale_fill_brewer(palette="Set2")
+    
+ g + geom_point(aes(x,y, shape= predicted), size = 2)
+   
+
+```
+
+
+```{r}
+rm(g)
+rm(plot.df)
+rm(plot.df1)
+rm(result)
+rm(ptree)
+rm(subsmoke_proj)
+rm(subtestset)
+rm(subtrainset)
+```
+
+#balanced
+```{r}
+#balanced
+labels.rose <- smoke.rose$smoking
+smoke.rose <- smoke.rose %>% dplyr::select(-smoking)
+set.seed(1)
+smokeMat.rose <- as.matrix(smoke.rose)
+smoke.svd.rose <- svd(smokeMat.rose)
+smoke_proj.rose <- as.data.frame(smokeMat.rose %*% smoke.svd.rose[[3]][,c(1,2)]) %>% mutate(labels = labels.rose)
+set.seed(1)
+subsmoke_proj.rose <- sample_n(smoke_proj.rose,1000)  #for plotting purposes
+```
+
+
+```{r}
+set.seed(1)
+tt_split.rose  <- createDataPartition(subsmoke_proj.rose$labels, p = 0.7, list = FALSE)
+subtrainset.rose = subsmoke_proj.rose[tt_split.rose, ] 
+subtestset.rose = subsmoke_proj.rose[-tt_split.rose, ] 
+
+Ypred_knn <- class::knn(subtrainset.rose[,c(1,2)], subtestset.rose[,c(1,2)], cl = subtrainset.rose$labels, k =5)
+accuracy(table(Ypred_knn, subtestset.rose$labels))  #69.5, just to visualise
+
+rm(smokeMat.rose)
+rm(smoke_proj.rose)
+rm(smoke.svd.rose)
+```
+
+```{r}
+plot.df = data.frame(subtestset.rose, predicted = Ypred_knn)
+
+
+plot.df1 = data.frame(x = plot.df$V1, 
+                      y = plot.df$V2, 
+                      predicted = plot.df$predicted)
+
+ 
+# find_hull = function(df) df[chull(df$x, df$y), ]
+# boundary = ddply(plot.df1, .variables = "predicted", .fun = find_hull)
+# #ddply apply function then combine results into a data frame
+# #find_hill finds convex hull to draw polygons onto 2d pca plots per group,
+#to determine boundary points
+
+# ggplot(plot.df, aes(V1, V2, color = predicted, fill = predicted)) + 
+#   geom_point(size = 2) + 
+#   geom_polygon(data = boundary, aes(x,y), alpha = 0.15)+
+#   labs(title="K-NN")+
+#   theme_minimal()
+```
+
+```{r}
+#my visualisation of the knn result
+plotdefinitivo <- as.data.frame(cbind(plot.df1,subtestset.rose))
+
+g <- ggplot(plotdefinitivo)+
+  geom_point(aes(V1,V2, col = labels), size = 4)+
+  labs(title="K-NN on a subset of the original observations")+
+  theme_minimal()+
+  theme(plot.title=element_text(face="bold",  hjust=0.5))+
+  scale_fill_brewer(palette="Set2")
+    
+ g + geom_point(aes(x,y, shape= predicted), size = 2)
+``` 
+ 
+```{r}   
+rm(g)
+rm(plot.df)
+rm(plot.df1)
+rm(subsmoke_proj.rose)
+rm(subtestset.rose)
+rm(subtrainset.rose)
+```
+
+#load the dataset again for logistic regression
+First things first, assumptions check
+```{r}
+smoke <- as_tibble(readr::read_csv("C:/Users/pc/Desktop/UNIMI- DSE/Corsi singoli/Machine Learning, Statistical Learning, Deep Learning, Cloud Distributed Computing and AI/Statistical methods for ML module/First personal project/smoking.csv", show_col_types = FALSE))
+
+#transform in factors the variables that should be factors
+smoke$gender <- as.factor(smoke$gender)
+smoke$`hearing(left)` <- as.factor(smoke$`hearing(left)`)
+smoke$`hearing(right)` <- as.factor(smoke$`hearing(left)`)
+smoke$`Urine protein` <- as.factor(smoke$`Urine protein`)
+smoke$oral <- as.factor(smoke$oral)
+smoke$`dental caries` <- as.factor(smoke$`dental caries`)
+smoke$tartar <- as.factor(smoke$tartar)
+smoke$smoking <- as.factor(smoke$smoking)
+
+#remove both ID and oral, which is useless
+#ID is simply a numeric, meaningless identifier
+#oral is a one level factor 
+smoke <- smoke %>% dplyr::select(-c(ID,oral)) 
+
+
+#rename the columns
+cn <- c("gender","age","height","weight","waist","eyesight_L","eyesight_R","hearing_L","hearing_R", "systolic","relaxation","sugar","cholesterol","triglyceride","HDL","LDL","hemoglobin","urine_protein","serum_creatinine","AST","ALT","Gtp", "caries","tartar","smoking")
+colnames(smoke) <- cn
+rm(cn)
+#set smoking as the first column
+smoke <- smoke %>% relocate(smoking)
+smoke <- smoke %>% select(-c(waist, ALT))
+
+```
+
+# 3- correlation
+```{r}
+# 1- binary response variable
+# 2- data are indipendent
+
+corrplot(cor(smoke[, sapply(smoke, is.numeric)]), method = "number") #LDL
+smoke <- smoke %>% dplyr::select(-LDL)
+
+#categorical variables correlation
+library(rcompanion)
+cramerV(smoke$gender, smoke$hearing_L)
+cramerV(smoke$gender, smoke$hearing_R)
+cramerV(smoke$gender, smoke$urine_protein)
+cramerV(smoke$gender, smoke$caries)
+cramerV(smoke$gender, smoke$tartar)
+
+
+cramerV(smoke$tartar, smoke$hearing_L)
+cramerV(smoke$tartar, smoke$hearing_R)
+cramerV(smoke$tartar, smoke$urine_protein)
+cramerV(smoke$tartar, smoke$caries)
+
+cramerV(smoke$caries, smoke$hearing_L)
+cramerV(smoke$caries, smoke$hearing_R)
+cramerV(smoke$caries, smoke$urine_protein)
+
+cramerV(smoke$urine_protein, smoke$hearing_L)
+cramerV(smoke$urine_protein, smoke$hearing_R)
+
+cramerV(smoke$hearing_L, smoke$hearing_R) #this one has correlation 1
+
+smoke <- smoke %>% dplyr::select(-hearing_L)
+
+smoke <- smoke %>% 
+  mutate(bmi = weight/((height/100) * (height/100))) %>% 
+  dplyr::select(-c(height,weight))
+#create a bmi column to delete eliminate the correlation between height and weight
+```
+
+#4 - indipendent continuous variables linearly correlated with the log odds of the dependent
+```{r}
+model <- glm(smoking~., smoke, family="binomial")
+probabs <- predict(model, type="response")
+logit <- log(probabs/(1-probabs))
+
+ggplot(smoke[1:1000,], aes(logit[1:1000], hemoglobin[1:1000]))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "loess")+
+  theme_bw()
+
+ggplot(smoke[1:1000,], aes(logit[1:1000], eyesight_L[1:1000]))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "loess")+
+  theme_bw()
+
+
+ggplot(smoke[1:1000,], aes(logit[1:1000], eyesight_R[1:1000]))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "loess")+
+  theme_bw()
+
+ggplot(smoke[1:1000,], aes(logit[1:1000], bmi[1:1000]))+
+  geom_point(alpha = 0.5)+
+  geom_smooth(method = "loess")+
+  theme_bw()
+
+#fairly linear
+```
+# 5- no extreme outliers
+```{r}
+plot(model, which=4, id.n=6)
+
+outliers <- c(1554,6777,8441,1416,43722,46560)
+smoke <- smoke[-outliers,]
+
+# #or
+# outliers <- cooks.distance(glm.fit) > 4/nrow(smoke)
+# #D(i) > 4/n
+# table(outliers)
+# trainset <- cbind(trainset,outliers)
+# trainset <- trainset %>% filter(outliers == FALSE) %>% select(-outliers)
+```
+
+```{r}
+#once again collinearity
+sqrt(vif(model))>2  
+smoke <- smoke %>% dplyr::select(-urine_protein)
+```
+
+#LOGISTIC REGRESSION
+```{r}
+set.seed(1)
+tt_split  <- createDataPartition(smoke$smoking, p = 0.7, list = FALSE)
+trainset = smoke[tt_split, ] 
+testset = smoke[-tt_split, ] 
+
+glm.fit=glm(smoking~., data=trainset, family="binomial")
+summary(glm.fit)
+
+glm.probs=predict(glm.fit, testset, type="response") 
+
+glm.pred=ifelse(glm.probs>0.5,"1","0")
+tab2 <- table(glm.pred,testset$smoking)
+accuracy(tab2) #~74.6%
+
+#ROC-AUC
+ROCPred <- prediction(glm.probs, testset$smoking) 
+ROCPer <- performance(ROCPred, measure = "tpr", 
+                             x.measure = "fpr")
+   
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+auc   #~0.82
+   
+# Plotting curve
+plot(ROCPer)
+
+plot(ROCPer, colorize = TRUE, 
+     print.cutoffs.at = seq(0.1, by = 0.1), 
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+```
+
+#balanced
+```{r}
+#balancing the scaled dataset
+#install.packages("smotefamily")
+library(ROSE)
+smoke.rose <- ROSE(smoking~., data=smoke, seed=3)$data
+table(smoke.rose$smoking)
+
+#split with scaled balanced data
+set.seed(1)
+tt_split.rose  <- caret::createDataPartition(smoke.rose$smoking, p = 0.7, list = FALSE)
+trainset.rose = smoke.rose[tt_split.rose, ] #38985 rows
+testset.rose = smoke.rose[-tt_split.rose, ] #16707 rows
+```
+
+```{r}
+glm.fit=glm(smoking~., data=trainset.rose, family="binomial")
+summary(glm.fit)
+
+glm.probs=predict(glm.fit, testset.rose, type="response") 
+
+glm.pred=ifelse(glm.probs>0.5,"1","0")
+tab2 <- table(glm.pred,testset.rose$smoking)
+accuracy(tab2) #~75.3%
+
+#ROC-AUC
+ROCPred <- prediction(glm.probs, testset.rose$smoking) 
+ROCPer <- performance(ROCPred, measure = "tpr", 
+                             x.measure = "fpr")
+   
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+auc   #~0.82
+   
+# Plotting curve
+plot(ROCPer)
+
+plot(ROCPer, colorize = TRUE, 
+     print.cutoffs.at = seq(0.1, by = 0.1), 
+     main = "ROC CURVE")
+abline(a = 0, b = 1)
+auc <- round(auc, 4)
+legend(.6, .4, auc, title = "AUC", cex = 1)
+```
+
